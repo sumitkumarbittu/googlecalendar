@@ -10,62 +10,21 @@ const morgan = require('morgan');
 const app = express();
 
 // ==================== CONFIGURATION ====================
-const PORT = process.env.PORT || 10000;
+const PORT = process.env.PORT || 3001;
 const NODE_ENV = process.env.NODE_ENV || 'development';
-
-// Detect environment
-const isLocal = NODE_ENV === 'development';
-const isRender = process.env.RENDER === 'true' || 
-                 process.env.RENDER_EXTERNAL_URL !== undefined;
-
-console.log(`Environment: ${isRender ? 'Render.com' : isLocal ? 'Local' : 'Production'}`);
-console.log(`RENDER_EXTERNAL_URL: ${process.env.RENDER_EXTERNAL_URL || 'Not set'}`);
-
-// Set URLs based on environment
-let FRONTEND_URL, REDIRECT_URI;
-
-if (isRender && process.env.RENDER_EXTERNAL_URL) {
-  // Running on Render.com
-  FRONTEND_URL = process.env.RENDER_EXTERNAL_URL;
-  REDIRECT_URI = `${FRONTEND_URL}/api/auth/google/callback`;
-  console.log(`Using Render URL: ${FRONTEND_URL}`);
-} else if (isLocal) {
-  // Local development
-  FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
-  REDIRECT_URI = process.env.REDIRECT_URI || `http://localhost:${PORT}/api/auth/google/callback`;
-  console.log(`Using Local URL: ${FRONTEND_URL}`);
-} else {
-  // Other production environment
-  FRONTEND_URL = process.env.FRONTEND_URL;
-  REDIRECT_URI = process.env.REDIRECT_URI || `${FRONTEND_URL}/api/auth/google/callback`;
-}
-
-// Override with environment variables if explicitly set
-if (process.env.FRONTEND_URL) FRONTEND_URL = process.env.FRONTEND_URL;
-if (process.env.REDIRECT_URI) REDIRECT_URI = process.env.REDIRECT_URI;
-
-// Final validation
-if (!FRONTEND_URL || !REDIRECT_URI) {
-  console.error('❌ ERROR: FRONTEND_URL and REDIRECT_URI must be set');
-  process.exit(1);
-}
+const isProduction = NODE_ENV === 'production';
 
 // Google OAuth Configuration
 const GOOGLE_CLIENT_ID = process.env.GOOGLE_CLIENT_ID;
 const GOOGLE_CLIENT_SECRET = process.env.GOOGLE_CLIENT_SECRET;
+const REDIRECT_URI = process.env.REDIRECT_URI || `http://localhost:${PORT}/api/auth/google/callback`;
+const FRONTEND_URL = process.env.FRONTEND_URL || 'http://localhost:3000';
 
 // Validate required environment variables
 if (!GOOGLE_CLIENT_ID || !GOOGLE_CLIENT_SECRET) {
   console.error('❌ ERROR: GOOGLE_CLIENT_ID and GOOGLE_CLIENT_SECRET are required in .env file');
-  console.error('Please set them in Render.com environment variables');
   process.exit(1);
 }
-
-console.log(`✅ Configuration loaded:`);
-console.log(`   Frontend URL: ${FRONTEND_URL}`);
-console.log(`   Redirect URI: ${REDIRECT_URI}`);
-console.log(`   Port: ${PORT}`);
-console.log(`   Google Client ID: ${GOOGLE_CLIENT_ID ? 'Set' : 'Missing!'}`);
 
 // ==================== MIDDLEWARE ====================
 
@@ -75,26 +34,16 @@ app.use(cors({
     // Allow requests with no origin (like mobile apps or curl requests)
     if (!origin) return callback(null, true);
     
-    // Allow all origins in development and Render
-    if (!isLocal) return callback(null, true);
+    // Allow all origins in development
+    if (!isProduction) return callback(null, true);
     
-    // In local development, allow common origins
-    const allowedOrigins = [
-      'http://localhost:3000',
-      'http://localhost:3001',
-      'http://localhost:10000',
-      FRONTEND_URL
-    ];
-    
-    if (allowedOrigins.includes(origin) || origin.includes('localhost')) {
-      return callback(null, true);
-    }
-    
-    return callback(new Error('Not allowed by CORS'));
+    // In production, you might want to restrict origins
+    // For now, allow all
+    return callback(null, true);
   },
   credentials: true,
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS', 'PATCH'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cookies'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'Accept', 'Origin', 'Cookies', 'Set-Cookie'],
   exposedHeaders: ['Set-Cookie']
 }));
 
@@ -102,7 +51,7 @@ app.use(cors({
 app.options('*', cors());
 
 // Request logging
-app.use(morgan(isLocal ? 'dev' : 'combined'));
+app.use(morgan(isProduction ? 'combined' : 'dev'));
 
 // Body parsing
 app.use(express.json({ limit: '10mb' }));
@@ -110,38 +59,20 @@ app.use(express.urlencoded({ extended: true, limit: '10mb' }));
 
 // Cookies and sessions
 app.use(cookieParser());
-
-// Session configuration
-const sessionConfig = {
+app.use(session({
   name: 'calendar_session',
   secret: process.env.SESSION_SECRET || crypto.randomBytes(64).toString('hex'),
   resave: false,
   saveUninitialized: false,
   cookie: {
+    secure: isProduction,
     httpOnly: true,
+    sameSite: isProduction ? 'none' : 'lax',
     maxAge: 60 * 60 * 1000, // 1 hour
-    path: '/'
+    domain: isProduction ? process.env.COOKIE_DOMAIN : undefined
   },
-  store: new session.MemoryStore()
-};
-
-// Adjust cookie settings based on environment
-if (isRender) {
-  // Render requires secure cookies and sameSite none for cross-site
-  sessionConfig.cookie.secure = true;
-  sessionConfig.cookie.sameSite = 'none';
-  console.log('🔒 Using secure cookies for Render.com');
-} else if (isLocal) {
-  // Local development
-  sessionConfig.cookie.secure = false;
-  sessionConfig.cookie.sameSite = 'lax';
-} else {
-  // Other production
-  sessionConfig.cookie.secure = true;
-  sessionConfig.cookie.sameSite = 'strict';
-}
-
-app.use(session(sessionConfig));
+  store: new session.MemoryStore() // Use memory store for simplicity
+}));
 
 // Security headers
 app.use((req, res, next) => {
@@ -153,7 +84,7 @@ app.use((req, res, next) => {
   res.setHeader('X-Frame-Options', 'DENY');
   res.setHeader('X-XSS-Protection', '1; mode=block');
   
-  if (isRender || !isLocal) {
+  if (isProduction) {
     res.setHeader('Strict-Transport-Security', 'max-age=31536000; includeSubDomains');
   }
   
@@ -271,7 +202,7 @@ function cleanupExpiredSessions() {
     }
   }
   
-  if (cleaned > 0 && isLocal) {
+  if (cleaned > 0) {
     console.log(`[Cleanup] Removed ${cleaned} expired sessions`);
   }
 }
@@ -366,24 +297,13 @@ app.get('/api/auth/google', (req, res) => {
     });
     
     // Store session ID in HTTP-only cookie
-    const cookieOptions = {
+    res.cookie('session_id', sessionId, {
       httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       maxAge: 60 * 60 * 1000, // 1 hour
       path: '/'
-    };
-    
-    if (isRender) {
-      cookieOptions.secure = true;
-      cookieOptions.sameSite = 'none';
-    } else if (isLocal) {
-      cookieOptions.secure = false;
-      cookieOptions.sameSite = 'lax';
-    } else {
-      cookieOptions.secure = true;
-      cookieOptions.sameSite = 'strict';
-    }
-    
-    res.cookie('session_id', sessionId, cookieOptions);
+    });
     
     // Generate Google OAuth URL
     const authUrl = oauth2Client.generateAuthUrl({
@@ -404,15 +324,13 @@ app.get('/api/auth/google', (req, res) => {
       success: true, 
       authUrl,
       sessionId,
-      redirectUri: REDIRECT_URI,
-      frontendUrl: FRONTEND_URL
+      redirectUri: REDIRECT_URI 
     });
   } catch (error) {
     console.error('Auth init error:', error);
     res.status(500).json({ 
       success: false, 
-      error: 'Failed to initialize authentication',
-      details: isLocal ? error.message : undefined
+      error: 'Failed to initialize authentication' 
     });
   }
 });
@@ -425,12 +343,10 @@ app.get('/api/auth/google/callback', async (req, res) => {
     const { code, state: sessionId, error: googleError } = req.query;
     
     if (googleError) {
-      console.error('Google OAuth error:', googleError);
       throw new Error(`Google OAuth error: ${googleError}`);
     }
     
     if (!sessionId || !activeSessions.has(sessionId)) {
-      console.error('Invalid session ID:', sessionId);
       throw new Error('Invalid session ID');
     }
     
@@ -456,27 +372,14 @@ app.get('/api/auth/google/callback', async (req, res) => {
       expiry
     });
     
-    console.log(`✅ User authenticated: ${userInfo.data.email}`);
-    
     // Set session cookie
-    const cookieOptions = {
+    res.cookie('session_id', sessionId, {
       httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       maxAge: 60 * 60 * 1000,
       path: '/'
-    };
-    
-    if (isRender) {
-      cookieOptions.secure = true;
-      cookieOptions.sameSite = 'none';
-    } else if (isLocal) {
-      cookieOptions.secure = false;
-      cookieOptions.sameSite = 'lax';
-    } else {
-      cookieOptions.secure = true;
-      cookieOptions.sameSite = 'strict';
-    }
-    
-    res.cookie('session_id', sessionId, cookieOptions);
+    });
     
     // Redirect to frontend with success
     const redirectUrl = new URL(`${FRONTEND_URL}/auth/callback`);
@@ -537,23 +440,12 @@ app.post('/api/auth/logout', (req, res) => {
     }
     
     // Clear session cookie
-    const clearCookieOptions = {
+    res.clearCookie('session_id', {
       httpOnly: true,
+      secure: isProduction,
+      sameSite: isProduction ? 'none' : 'lax',
       path: '/'
-    };
-    
-    if (isRender) {
-      clearCookieOptions.secure = true;
-      clearCookieOptions.sameSite = 'none';
-    } else if (isLocal) {
-      clearCookieOptions.secure = false;
-      clearCookieOptions.sameSite = 'lax';
-    } else {
-      clearCookieOptions.secure = true;
-      clearCookieOptions.sameSite = 'strict';
-    }
-    
-    res.clearCookie('session_id', clearCookieOptions);
+    });
     
     // Clear any express-session data
     if (req.session) {
@@ -580,8 +472,6 @@ app.get('/api/auth/config', (req, res) => {
   res.json({
     clientId: GOOGLE_CLIENT_ID,
     redirectUri: REDIRECT_URI,
-    frontendUrl: FRONTEND_URL,
-    backendUrl: isRender ? FRONTEND_URL : `http://localhost:${PORT}`,
     scopes: [
       'https://www.googleapis.com/auth/calendar.readonly',
       'https://www.googleapis.com/auth/calendar.events',
@@ -589,7 +479,8 @@ app.get('/api/auth/config', (req, res) => {
       'email',
       'profile'
     ],
-    environment: isRender ? 'render' : isLocal ? 'local' : 'production'
+    frontendUrl: FRONTEND_URL,
+    apiUrl: `http://localhost:${PORT}` // Adjust for production
   });
 });
 
@@ -661,7 +552,7 @@ app.get('/api/calendar/current', async (req, res) => {
     
     res.status(500).json({ 
       error: 'Failed to fetch current meeting',
-      details: isLocal ? error.message : undefined
+      details: error.message 
     });
   }
 });
@@ -709,13 +600,59 @@ app.get('/api/calendar/today', async (req, res) => {
     console.error('Get today meetings error:', error.message);
     res.status(500).json({ 
       error: 'Failed to fetch today\'s meetings',
-      details: isLocal ? error.message : undefined
+      details: error.message 
     });
   }
 });
 
 /**
- * 8. Create or update event with transcription
+ * 8. Get calendar events within date range
+ */
+app.get('/api/calendar/events', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { calendar } = getCalendarClient(validation.sessionId);
+    const { 
+      timeMin = new Date().toISOString(),
+      timeMax = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(), // 7 days
+      maxResults = 50,
+      calendarId = 'primary'
+    } = req.query;
+    
+    const response = await calendar.events.list({
+      calendarId,
+      timeMin,
+      timeMax,
+      maxResults: Math.min(parseInt(maxResults), 250),
+      singleEvents: true,
+      orderBy: 'startTime'
+    });
+    
+    res.json({
+      events: response.data.items || [],
+      total: response.data.items?.length || 0,
+      timeMin,
+      timeMax,
+      calendarId
+    });
+  } catch (error) {
+    console.error('Get events error:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to fetch calendar events',
+      details: error.message 
+    });
+  }
+});
+
+/**
+ * 9. Create or update event with transcription
  */
 app.post('/api/calendar/events', async (req, res) => {
   try {
@@ -850,93 +787,513 @@ app.post('/api/calendar/events', async (req, res) => {
     
     res.status(500).json({
       error: `Failed to ${req.body.action || 'process'} calendar event`,
-      details: isLocal ? error.message : undefined
+      details: error.message
     });
   }
 });
 
-// ==================== HEALTH & INFO ENDPOINTS ====================
+/**
+ * 10. Append transcription to existing event
+ */
+app.patch('/api/calendar/events/:eventId/transcription', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { calendar, userInfo } = getCalendarClient(validation.sessionId);
+    const { eventId } = req.params;
+    const { transcription, timestamp, title = 'Meeting Notes' } = req.body;
+    
+    if (!transcription || !transcription.trim()) {
+      return res.status(400).json({ 
+        error: 'Transcription text is required' 
+      });
+    }
+    
+    // Get existing event
+    const existingEvent = await calendar.events.get({
+      calendarId: 'primary',
+      eventId: eventId
+    });
+    
+    const existingDescription = existingEvent.data.description || '';
+    const noteTimestamp = timestamp || new Date().toLocaleString();
+    const separator = existingDescription ? '\n\n---\n\n' : '';
+    const transcriptionBlock = `## ${title} (${noteTimestamp})\n\n${transcription}`;
+    
+    const updatedEvent = {
+      ...existingEvent.data,
+      description: existingDescription + separator + transcriptionBlock
+    };
+    
+    const response = await calendar.events.update({
+      calendarId: 'primary',
+      eventId: eventId,
+      resource: updatedEvent
+    });
+    
+    // Track this transcription
+    if (!transcriptionSessions.has(validation.sessionId)) {
+      transcriptionSessions.set(validation.sessionId, []);
+    }
+    
+    const userTranscriptions = transcriptionSessions.get(validation.sessionId);
+    userTranscriptions.push({
+      eventId: eventId,
+      summary: existingEvent.data.summary,
+      transcriptionLength: transcription.length,
+      timestamp: new Date().toISOString(),
+      action: 'appended'
+    });
+    
+    res.json({
+      success: true,
+      eventId: eventId,
+      htmlLink: response.data.htmlLink,
+      descriptionLength: response.data.description?.length || 0,
+      user: {
+        email: userInfo.email,
+        name: userInfo.name
+      }
+    });
+  } catch (error) {
+    console.error('Append transcription error:', error.message);
+    res.status(500).json({
+      error: 'Failed to append transcription to event',
+      details: error.message
+    });
+  }
+});
 
 /**
- * Health check
+ * 11. Search calendar events
+ */
+app.get('/api/calendar/search', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { calendar } = getCalendarClient(validation.sessionId);
+    const { 
+      q = '',
+      timeMin = new Date().toISOString(),
+      timeMax = new Date(Date.now() + 30 * 24 * 60 * 60 * 1000).toISOString(), // 30 days
+      maxResults = 20,
+      calendarId = 'primary'
+    } = req.query;
+    
+    const response = await calendar.events.list({
+      calendarId,
+      q: q || undefined,
+      timeMin,
+      timeMax,
+      maxResults: Math.min(parseInt(maxResults), 50),
+      singleEvents: true,
+      orderBy: 'startTime'
+    });
+    
+    res.json({
+      query: q,
+      events: response.data.items || [],
+      total: response.data.items?.length || 0,
+      timeRange: { timeMin, timeMax }
+    });
+  } catch (error) {
+    console.error('Search error:', error.message);
+    res.status(500).json({ 
+      error: 'Failed to search calendar',
+      details: error.message 
+    });
+  }
+});
+
+// ==================== TRANSCRIPTION ENDPOINTS ====================
+
+/**
+ * 12. Start a transcription session
+ */
+app.post('/api/transcription/sessions', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { meetingId, meetingTitle, autoSave = true } = req.body;
+    
+    const sessionId = validation.sessionId;
+    const sessionData = {
+      sessionId,
+      meetingId,
+      meetingTitle: meetingTitle || 'Untitled Meeting',
+      startTime: new Date().toISOString(),
+      chunks: [],
+      autoSave,
+      status: 'active'
+    };
+    
+    transcriptionSessions.set(sessionId, sessionData);
+    
+    res.json({
+      success: true,
+      sessionId,
+      meetingId,
+      meetingTitle: sessionData.meetingTitle,
+      startTime: sessionData.startTime,
+      autoSave
+    });
+  } catch (error) {
+    console.error('Start transcription session error:', error);
+    res.status(500).json({
+      error: 'Failed to start transcription session',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * 13. Add transcription chunk
+ */
+app.post('/api/transcription/chunks', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { text, isFinal = false, chunkIndex } = req.body;
+    const sessionId = validation.sessionId;
+    
+    let sessionData = transcriptionSessions.get(sessionId);
+    
+    if (!sessionData) {
+      // Create a new session if none exists
+      sessionData = {
+        sessionId,
+        meetingId: null,
+        meetingTitle: 'Live Transcription',
+        startTime: new Date().toISOString(),
+        chunks: [],
+        autoSave: false,
+        status: 'active'
+      };
+      transcriptionSessions.set(sessionId, sessionData);
+    }
+    
+    const chunk = {
+      text: text.trim(),
+      isFinal,
+      chunkIndex: chunkIndex || sessionData.chunks.length,
+      timestamp: new Date().toISOString(),
+      length: text.length
+    };
+    
+    sessionData.chunks.push(chunk);
+    sessionData.lastActivity = new Date().toISOString();
+    
+    // Auto-save to calendar if enabled and we have a meeting ID
+    if (isFinal && sessionData.autoSave && sessionData.meetingId) {
+      try {
+        const { calendar } = getCalendarClient(sessionId);
+        // Implementation for auto-saving would go here
+      } catch (saveError) {
+        console.error('Auto-save failed:', saveError.message);
+      }
+    }
+    
+    res.json({
+      success: true,
+      chunkId: chunk.chunkIndex,
+      sessionId,
+      totalChunks: sessionData.chunks.length,
+      totalTextLength: sessionData.chunks.reduce((sum, c) => sum + c.length, 0)
+    });
+  } catch (error) {
+    console.error('Add transcription chunk error:', error);
+    res.status(500).json({
+      error: 'Failed to add transcription chunk',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * 14. Complete transcription and save to calendar
+ */
+app.post('/api/transcription/complete', async (req, res) => {
+  try {
+    const validation = await validateSession(req);
+    
+    if (!validation.valid) {
+      return res.status(401).json({ 
+        error: validation.error 
+      });
+    }
+    
+    const { saveToCalendar = true, meetingId, summary } = req.body;
+    const sessionId = validation.sessionId;
+    
+    const sessionData = transcriptionSessions.get(sessionId);
+    
+    if (!sessionData) {
+      return res.status(404).json({
+        error: 'No active transcription session found'
+      });
+    }
+    
+    // Combine all final chunks
+    const finalChunks = sessionData.chunks.filter(chunk => chunk.isFinal);
+    const transcription = finalChunks.map(chunk => chunk.text).join(' ');
+    
+    if (transcription.length === 0) {
+      return res.status(400).json({
+        error: 'No transcription text to save'
+      });
+    }
+    
+    const result = {
+      transcription,
+      meetingId: meetingId || sessionData.meetingId,
+      meetingTitle: summary || sessionData.meetingTitle,
+      startTime: sessionData.startTime,
+      endTime: new Date().toISOString(),
+      duration: Date.now() - new Date(sessionData.startTime).getTime(),
+      chunkCount: sessionData.chunks.length,
+      finalChunkCount: finalChunks.length,
+      totalLength: transcription.length
+    };
+    
+    let calendarResult = null;
+    
+    // Save to calendar if requested and we have meeting ID
+    if (saveToCalendar && result.meetingId) {
+      try {
+        const { calendar } = getCalendarClient(sessionId);
+        
+        // Get existing event
+        const existingEvent = await calendar.events.get({
+          calendarId: 'primary',
+          eventId: result.meetingId
+        });
+        
+        const existingDescription = existingEvent.data.description || '';
+        const timestamp = new Date().toLocaleString();
+        const separator = existingDescription ? '\n\n---\n\n' : '';
+        const transcriptionBlock = `## Meeting Transcription (${timestamp})\n\n${transcription}`;
+        
+        const updatedEvent = {
+          ...existingEvent.data,
+          description: existingDescription + separator + transcriptionBlock
+        };
+        
+        const response = await calendar.events.update({
+          calendarId: 'primary',
+          eventId: result.meetingId,
+          resource: updatedEvent
+        });
+        
+        calendarResult = {
+          success: true,
+          eventId: result.meetingId,
+          htmlLink: response.data.htmlLink,
+          descriptionLength: response.data.description?.length || 0
+        };
+      } catch (calendarError) {
+        console.error('Calendar save error:', calendarError.message);
+        calendarResult = {
+          success: false,
+          error: calendarError.message
+        };
+      }
+    }
+    
+    // Clear the session
+    transcriptionSessions.delete(sessionId);
+    
+    res.json({
+      success: true,
+      transcription: {
+        ...result,
+        preview: transcription.substring(0, 200) + (transcription.length > 200 ? '...' : '')
+      },
+      calendar: calendarResult,
+      savedToCalendar: saveToCalendar && calendarResult?.success
+    });
+  } catch (error) {
+    console.error('Complete transcription error:', error);
+    res.status(500).json({
+      error: 'Failed to complete transcription',
+      details: error.message
+    });
+  }
+});
+
+/**
+ * 15. Get transcription session status
+ */
+app.get('/api/transcription/sessions/:sessionId', (req, res) => {
+  try {
+    const { sessionId } = req.params;
+    const sessionData = transcriptionSessions.get(sessionId);
+    
+    if (!sessionData) {
+      return res.status(404).json({
+        error: 'Transcription session not found'
+      });
+    }
+    
+    const finalChunks = sessionData.chunks.filter(chunk => chunk.isFinal);
+    const transcription = finalChunks.map(chunk => chunk.text).join(' ');
+    
+    res.json({
+      sessionId,
+      meetingId: sessionData.meetingId,
+      meetingTitle: sessionData.meetingTitle,
+      startTime: sessionData.startTime,
+      lastActivity: sessionData.lastActivity,
+      status: sessionData.status,
+      chunkCount: sessionData.chunks.length,
+      finalChunkCount: finalChunks.length,
+      transcriptionLength: transcription.length,
+      transcriptionPreview: transcription.substring(0, 500) + (transcription.length > 500 ? '...' : ''),
+      autoSave: sessionData.autoSave
+    });
+  } catch (error) {
+    console.error('Get transcription session error:', error);
+    res.status(500).json({
+      error: 'Failed to get transcription session',
+      details: error.message
+    });
+  }
+});
+
+// ==================== HEALTH & ADMIN ENDPOINTS ====================
+
+/**
+ * 16. Health check
  */
 app.get('/api/health', (req, res) => {
   res.json({
     status: 'healthy',
     service: 'google-calendar-transcription-api',
     timestamp: new Date().toISOString(),
-    version: '2.0.0',
-    environment: isRender ? 'render' : isLocal ? 'development' : 'production',
-    deployment: {
-      url: FRONTEND_URL,
-      redirectUri: REDIRECT_URI,
-      port: PORT
-    },
-    google: {
-      clientId: GOOGLE_CLIENT_ID ? 'configured' : 'missing',
-      hasSecret: !!GOOGLE_CLIENT_SECRET
-    },
+    version: '1.0.0',
+    environment: NODE_ENV,
+    uptime: process.uptime(),
+    memory: process.memoryUsage(),
     sessions: {
       active: activeSessions.size,
       transcription: transcriptionSessions.size
     },
-    uptime: process.uptime()
-  });
-});
-
-/**
- * Server info
- */
-app.get('/api/info', (req, res) => {
-  res.json({
-    name: 'Google Calendar Transcription API',
-    description: 'Read/Write Google Calendar with temporary sessions',
-    version: '2.0.0',
-    environment: isRender ? 'render' : isLocal ? 'development' : 'production',
-    deployment: FRONTEND_URL,
-    supports: [
-      'Google OAuth 2.0',
-      'Calendar Read/Write',
-      'Temporary Session Storage',
-      'Render.com Compatible'
-    ],
-    endpoints: {
-      auth: '/api/auth/*',
-      calendar: '/api/calendar/*',
-      health: '/api/health',
-      info: '/api/info'
+    google: {
+      clientId: GOOGLE_CLIENT_ID ? 'configured' : 'missing',
+      redirectUri: REDIRECT_URI
     }
   });
 });
 
 /**
- * Debug endpoint (only in development/Render)
+ * 17. Get server info (public)
  */
-app.get('/api/debug', (req, res) => {
-  if (!isLocal && !isRender) {
-    return res.status(403).json({ error: 'Debug endpoint disabled in production' });
+app.get('/api/info', (req, res) => {
+  res.json({
+    name: 'Google Calendar Transcription API',
+    description: 'Temporary OAuth-based calendar read/write with transcription',
+    version: '1.0.0',
+    environment: NODE_ENV,
+    supports: [
+      'Google OAuth 2.0',
+      'Calendar Read/Write',
+      'Live Transcription',
+      'Temporary Session Storage',
+      'CORS Enabled'
+    ],
+    endpoints: {
+      auth: ['/api/auth/google', '/api/auth/status', '/api/auth/logout'],
+      calendar: ['/api/calendar/current', '/api/calendar/today', '/api/calendar/events'],
+      transcription: ['/api/transcription/sessions', '/api/transcription/chunks', '/api/transcription/complete']
+    },
+    repository: 'https://github.com/yourusername/calendar-transcription-api'
+  });
+});
+
+/**
+ * 18. Debug endpoint (only in development)
+ */
+app.get('/api/debug/sessions', (req, res) => {
+  if (isProduction) {
+    return res.status(403).json({ 
+      error: 'Debug endpoint disabled in production' 
+    });
   }
   
+  const sessions = Array.from(activeSessions.entries()).map(([id, data]) => ({
+    id,
+    userEmail: data.userInfo?.email,
+    userName: data.userInfo?.name,
+    expiresIn: Math.max(0, data.expiry - Date.now()),
+    hasTokens: !!data.tokens,
+    tokenExpiry: data.tokens?.expiry_date ? new Date(data.tokens.expiry_date).toISOString() : null
+  }));
+  
+  const transcriptions = Array.from(transcriptionSessions.entries()).map(([id, data]) => ({
+    id,
+    meetingId: data.meetingId,
+    meetingTitle: data.meetingTitle,
+    chunkCount: data.chunks?.length || 0,
+    status: data.status,
+    startTime: data.startTime
+  }));
+  
   res.json({
-    environment: {
-      isLocal,
-      isRender,
-      NODE_ENV,
-      PORT,
-      RENDER_EXTERNAL_URL: process.env.RENDER_EXTERNAL_URL
+    totalActiveSessions: activeSessions.size,
+    totalTranscriptionSessions: transcriptionSessions.size,
+    sessions,
+    transcriptionSessions: transcriptions,
+    serverTime: new Date().toISOString(),
+    cleanupInterval: CLEANUP_INTERVAL
+  });
+});
+
+/**
+ * 19. Clear all sessions (debug/emergency only)
+ */
+app.post('/api/debug/clear-all', (req, res) => {
+  if (isProduction && req.query.force !== 'true') {
+    return res.status(403).json({ 
+      error: 'Use ?force=true in production to clear sessions' 
+    });
+  }
+  
+  const activeCount = activeSessions.size;
+  const transcriptionCount = transcriptionSessions.size;
+  
+  activeSessions.clear();
+  transcriptionSessions.clear();
+  
+  res.json({
+    success: true,
+    cleared: {
+      activeSessions: activeCount,
+      transcriptionSessions: transcriptionCount
     },
-    urls: {
-      FRONTEND_URL,
-      REDIRECT_URI,
-      currentUrl: `${req.protocol}://${req.get('host')}${req.originalUrl}`
-    },
-    google: {
-      hasClientId: !!GOOGLE_CLIENT_ID,
-      hasClientSecret: !!GOOGLE_CLIENT_SECRET,
-      redirectUri: REDIRECT_URI
-    },
-    cookies: req.headers.cookie,
-    headers: req.headers
+    timestamp: new Date().toISOString()
   });
 });
 
@@ -948,13 +1305,12 @@ app.use('*', (req, res) => {
     error: 'Endpoint not found',
     path: req.originalUrl,
     method: req.method,
-    timestamp: new Date().toISOString(),
     availableEndpoints: {
       auth: '/api/auth/*',
       calendar: '/api/calendar/*',
+      transcription: '/api/transcription/*',
       health: '/api/health',
-      info: '/api/info',
-      debug: '/api/debug'
+      info: '/api/info'
     }
   });
 });
@@ -971,9 +1327,8 @@ app.use((err, req, res, next) => {
     method: req.method
   };
   
-  if (isLocal || isRender) {
+  if (!isProduction) {
     errorResponse.stack = err.stack;
-    errorResponse.details = err.toString();
   }
   
   res.status(statusCode).json(errorResponse);
@@ -1014,31 +1369,32 @@ app.listen(PORT, () => {
 
 ✅ Server is running!
 📍 Port: ${PORT}
-🌐 Environment: ${isRender ? 'Render.com' : isLocal ? 'Development' : 'Production'}
+🌐 Environment: ${NODE_ENV}
 🔐 OAuth Client: ${GOOGLE_CLIENT_ID ? 'Configured' : 'MISSING!'}
 🔄 Redirect URI: ${REDIRECT_URI}
 🎯 Frontend URL: ${FRONTEND_URL}
 
 📊 API Endpoints:
-   🔐 Auth:     ${FRONTEND_URL}/api/auth/google
-   📅 Calendar: ${FRONTEND_URL}/api/calendar/current
-   ❤️  Health:    ${FRONTEND_URL}/api/health
-   ℹ️  Info:      ${FRONTEND_URL}/api/info
+   🔐 Auth:     http://localhost:${PORT}/api/auth/google
+   📅 Calendar: http://localhost:${PORT}/api/calendar/current
+   🎤 Transcribe: http://localhost:${PORT}/api/transcription/sessions
+   ❤️  Health:    http://localhost:${PORT}/api/health
 
-⚠️  IMPORTANT Google Cloud Console Setup:
-   1. Go to: https://console.cloud.google.com/apis/credentials
-   2. Add to Authorized Redirect URIs:
-      ${REDIRECT_URI}
-   3. Add to Authorized JavaScript Origins:
-      ${FRONTEND_URL}
+⚠️  IMPORTANT: Sessions are stored in memory only
+   - Data is lost on server restart
+   - No persistent storage enabled
+   - Perfect for privacy-focused applications
 
 🔒 Security Notes:
-   - Sessions stored in memory only
-   - Data lost on server restart
+   - CORS enabled from any origin
+   - HTTPS required in production
    - Session timeout: 1 hour
    - Automatic cleanup every 5 minutes
 
-💡 Test immediately:
-   curl ${FRONTEND_URL}/api/health
+💡 Next steps:
+   1. Open frontend at ${FRONTEND_URL}
+   2. Test auth flow
+   3. Check calendar integration
+   4. Deploy with Docker: 'docker-compose up -d'
   `);
 });
