@@ -940,6 +940,37 @@ app.get('/api/debug', (req, res) => {
   });
 });
 
+app.get('/auth/callback', (req, res) => {
+  const { success, error, email, sessionId } = req.query;
+  const ok = String(success).toLowerCase() === 'true';
+
+  res.setHeader('Content-Type', 'text/html; charset=utf-8');
+  res.status(200).send(`<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>Authentication ${ok ? 'Successful' : 'Failed'}</title>
+    <style>
+      body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:40px;line-height:1.5;color:#111}
+      .card{max-width:720px;margin:0 auto;border:1px solid #e5e7eb;border-radius:12px;padding:24px}
+      .ok{color:#065f46}
+      .bad{color:#991b1b}
+      code{background:#f3f4f6;padding:2px 6px;border-radius:6px}
+    </style>
+  </head>
+  <body>
+    <div class="card">
+      <h1 class="${ok ? 'ok' : 'bad'}">${ok ? 'Connected to Google Calendar' : 'Authentication Failed'}</h1>
+      ${ok ? `<p>Signed in as <code>${String(email || '')}</code>.</p>` : ''}
+      ${!ok ? `<p class="bad">${String(error || 'Unknown error')}</p>` : ''}
+      <p>You can close this tab and return to the app.</p>
+      ${ok ? `<p><small>Session: <code>${String(sessionId || '')}</code></small></p>` : ''}
+    </div>
+  </body>
+</html>`);
+});
+
 // ==================== ERROR HANDLING ====================
 
 // 404 handler
