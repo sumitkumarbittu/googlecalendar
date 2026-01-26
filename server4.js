@@ -357,13 +357,11 @@ function getUpcomingMeetings(events) {
 app.get('/api/auth/google', (req, res) => {
   try {
     const sessionId = generateSessionId();
-    const returnUrl = req.query.returnUrl || FRONTEND_URL;
     
-    // Store session in memory with return URL
+    // Store session in memory
     activeSessions.set(sessionId, {
       tokens: null,
       userInfo: null,
-      returnUrl: returnUrl,
       expiry: Date.now() + (60 * 60 * 1000) // 1 hour
     });
     
@@ -387,10 +385,7 @@ app.get('/api/auth/google', (req, res) => {
     
     res.cookie('session_id', sessionId, cookieOptions);
     
-    // Generate Google OAuth URL with session ID containing return URL info
-    const stateData = JSON.stringify({ sessionId, returnUrl });
-    const stateEncoded = Buffer.from(stateData).toString('base64');
-    
+    // Generate Google OAuth URL
     const authUrl = oauth2Client.generateAuthUrl({
       access_type: 'offline',
       scope: [
@@ -400,7 +395,7 @@ app.get('/api/auth/google', (req, res) => {
         'email',
         'profile'
       ],
-      state: stateEncoded,
+      state: sessionId,
       prompt: 'consent',
       include_granted_scopes: true
     });
@@ -426,21 +421,8 @@ app.get('/api/auth/google', (req, res) => {
  * 2. Handle Google OAuth callback
  */
 app.get('/api/auth/google/callback', async (req, res) => {
-  let returnUrl = FRONTEND_URL;
-  
   try {
-    const { code, state: stateParam, error: googleError } = req.query;
-    
-    // Decode state to get sessionId and returnUrl
-    let sessionId;
-    try {
-      const stateData = JSON.parse(Buffer.from(stateParam, 'base64').toString('utf8'));
-      sessionId = stateData.sessionId;
-      returnUrl = stateData.returnUrl || FRONTEND_URL;
-    } catch (e) {
-      // Fallback: state might be just sessionId (old format)
-      sessionId = stateParam;
-    }
+    const { code, state: sessionId, error: googleError } = req.query;
     
     if (googleError) {
       console.error('Google OAuth error:', googleError);
@@ -454,12 +436,6 @@ app.get('/api/auth/google/callback', async (req, res) => {
     
     if (!code) {
       throw new Error('No authorization code received');
-    }
-    
-    // Get stored return URL from session
-    const sessionData = activeSessions.get(sessionId);
-    if (sessionData && sessionData.returnUrl) {
-      returnUrl = sessionData.returnUrl;
     }
     
     // Exchange code for tokens
@@ -477,12 +453,10 @@ app.get('/api/auth/google/callback', async (req, res) => {
     activeSessions.set(sessionId, {
       tokens,
       userInfo: userInfo.data,
-      returnUrl,
       expiry
     });
     
     console.log(`✅ User authenticated: ${userInfo.data.email}`);
-    console.log(`   Redirecting to: ${returnUrl}`);
     
     // Set session cookie
     const cookieOptions = {
@@ -504,17 +478,16 @@ app.get('/api/auth/google/callback', async (req, res) => {
     
     res.cookie('session_id', sessionId, cookieOptions);
     
-    // Redirect to the original frontend URL with success flag
-    const redirectUrl = new URL(returnUrl);
+    // Redirect to frontend homepage with success flag
+    const redirectUrl = new URL(FRONTEND_URL);
     redirectUrl.searchParams.set('auth', 'success');
     
-    console.log(`   Final redirect URL: ${redirectUrl.toString()}`);
     res.redirect(redirectUrl.toString());
   } catch (error) {
     console.error('OAuth callback error:', error.message);
     
-    // Redirect to frontend with error
-    const redirectUrl = new URL(returnUrl);
+    // Redirect to frontend homepage with error
+    const redirectUrl = new URL(FRONTEND_URL);
     redirectUrl.searchParams.set('auth', 'error');
     redirectUrl.searchParams.set('error', error.message);
     
