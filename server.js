@@ -944,6 +944,11 @@ app.get('/auth/callback', (req, res) => {
   const { success, error, email, sessionId } = req.query;
   const ok = String(success).toLowerCase() === 'true';
 
+  const postAuthRedirectBase = process.env.POST_AUTH_REDIRECT_URL || FRONTEND_URL;
+  const redirectTarget = ok
+    ? new URL(String(postAuthRedirectBase || ''), `${req.protocol}://${req.get('host')}`).toString()
+    : '';
+
   res.setHeader('Content-Type', 'text/html; charset=utf-8');
   res.status(200).send(`<!doctype html>
 <html lang="en">
@@ -951,6 +956,7 @@ app.get('/auth/callback', (req, res) => {
     <meta charset="utf-8" />
     <meta name="viewport" content="width=device-width,initial-scale=1" />
     <title>Authentication ${ok ? 'Successful' : 'Failed'}</title>
+    ${ok && redirectTarget ? `<meta http-equiv="refresh" content="2;url=${redirectTarget}">` : ''}
     <style>
       body{font-family:system-ui,-apple-system,Segoe UI,Roboto,Ubuntu,Cantarell,Noto Sans,sans-serif;margin:40px;line-height:1.5;color:#111}
       .card{max-width:720px;margin:0 auto;border:1px solid #e5e7eb;border-radius:12px;padding:24px}
@@ -964,9 +970,11 @@ app.get('/auth/callback', (req, res) => {
       <h1 class="${ok ? 'ok' : 'bad'}">${ok ? 'Connected to Google Calendar' : 'Authentication Failed'}</h1>
       ${ok ? `<p>Signed in as <code>${String(email || '')}</code>.</p>` : ''}
       ${!ok ? `<p class="bad">${String(error || 'Unknown error')}</p>` : ''}
-      <p>You can close this tab and return to the app.</p>
+      ${ok && redirectTarget ? `<p>Redirecting you back to the app…</p>` : `<p>You can close this tab and return to the app.</p>`}
+      ${ok && redirectTarget ? `<p><a href="${redirectTarget}">Continue</a></p>` : ''}
       ${ok ? `<p><small>Session: <code>${String(sessionId || '')}</code></small></p>` : ''}
     </div>
+    ${ok && redirectTarget ? `<script>setTimeout(function(){window.location.href=${JSON.stringify(redirectTarget)};},1500);</script>` : ''}
   </body>
 </html>`);
 });
