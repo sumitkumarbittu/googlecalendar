@@ -478,17 +478,18 @@ app.get('/api/auth/google/callback', async (req, res) => {
     
     res.cookie('session_id', sessionId, cookieOptions);
     
-    // Redirect to frontend homepage with success flag
-    const redirectUrl = new URL(FRONTEND_URL);
-    redirectUrl.searchParams.set('auth', 'success');
+    // Redirect to frontend with success
+    const redirectUrl = new URL(`${FRONTEND_URL}/auth/callback`);
+    redirectUrl.searchParams.set('success', 'true');
+    redirectUrl.searchParams.set('sessionId', sessionId);
+    redirectUrl.searchParams.set('email', userInfo.data.email || '');
     
     res.redirect(redirectUrl.toString());
   } catch (error) {
     console.error('OAuth callback error:', error.message);
     
-    // Redirect to frontend homepage with error
-    const redirectUrl = new URL(FRONTEND_URL);
-    redirectUrl.searchParams.set('auth', 'error');
+    const redirectUrl = new URL(`${FRONTEND_URL}/auth/callback`);
+    redirectUrl.searchParams.set('success', 'false');
     redirectUrl.searchParams.set('error', error.message);
     
     res.redirect(redirectUrl.toString());
